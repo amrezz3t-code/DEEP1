@@ -1,0 +1,269 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080d16">
+<title>DEEP1 Mobile Sensor</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:#080d16;color:#edf3ff;font-family:Arial,sans-serif}
+main{max-width:650px;margin:auto}
+h1{text-align:center;color:#e7bd63;letter-spacing:3px;font-size:34px}
+.sub{text-align:center;color:#9aacc5;margin-bottom:22px}
+.card{background:#121e2e;border:1px solid #293c54;border-radius:15px;padding:16px;margin:12px 0}
+.status{padding:12px;border-radius:9px;background:#0b1523;margin-bottom:12px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#ff6868;margin-left:8px}
+.dot.on{background:#52d69a}
+button,input{font:inherit}
+button{border:0;border-radius:10px;padding:13px;margin:5px 0;width:100%;background:#e7bd63;color:#17130a;font-weight:bold}
+button.alt{background:#293b53;color:white}
+button.danger{background:#763e48;color:white}
+button:disabled{opacity:.4}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.metric{background:#091522;padding:13px;border-radius:10px;text-align:center}
+.metric small{color:#9aacc5;display:block;margin-bottom:8px}
+.metric b{font-size:21px;direction:ltr;display:block}
+input{width:100%;padding:11px;background:#091522;border:1px solid #354960;color:white;border-radius:8px;margin:5px 0}
+label{display:block;color:#aebed2;margin-top:9px}
+canvas{width:100%;background:#091522;border-radius:10px;margin-top:12px}
+.note{font-size:13px;color:#aebed2;line-height:1.8}
+#records{max-height:210px;overflow:auto;font-size:13px;line-height:1.9}
+</style>
+</head>
+<body>
+<main>
+<h1>DEEP1</h1>
+<div class="sub">MOBILE SENSOR · MAGNETIC FIELD ANALYSIS</div>
+
+<section class="card">
+ <div class="status"><span id="dot" class="dot"></span><span id="status">المستشعر متوقف</span></div>
+ <button id="start">تشغيل المستشعر</button>
+ <button id="stop" class="alt" disabled>إيقاف المستشعر</button>
+ <div class="note">يتطلب المتصفح دعم Magnetometer وفتح الصفحة من اتصال آمن HTTPS. السماح بالإذن مطلوب إذا طلبه المتصفح.</div>
+</section>
+
+<section class="card">
+ <h3>القراءات المباشرة</h3>
+ <div class="grid">
+  <div class="metric"><small>X · µT</small><b id="x">—</b></div>
+  <div class="metric"><small>Y · µT</small><b id="y">—</b></div>
+  <div class="metric"><small>Z · µT</small><b id="z">—</b></div>
+  <div class="metric"><small>المجال الكلي · µT</small><b id="total">—</b></div>
+  <div class="metric"><small>خط الأساس · µT</small><b id="base">—</b></div>
+  <div class="metric"><small>الفرق عن الأساس · µT</small><b id="delta">—</b></div>
+ </div>
+ <button id="calibrate" class="alt" disabled>معايرة خط الأساس</button>
+ <canvas id="chart" width="600" height="190"></canvas>
+</section>
+
+<section class="card">
+ <h3>تسجيل نقاط المسح</h3>
+ <label>رقم الصف</label>
+ <input id="row" type="number" min="1" value="1">
+ <label>رقم النقطة</label>
+ <input id="col" type="number" min="1" value="1">
+ <button id="save" disabled>تسجيل القراءة في هذه النقطة</button>
+ <button id="next" class="alt">النقطة التالية</button>
+ <button id="export" class="alt">تصدير CSV</button>
+ <button id="clear" class="danger">مسح جميع النقاط</button>
+ <div id="records" class="note">لا توجد قياسات مسجلة.</div>
+</section>
+
+<section class="card">
+ <h3>خريطة الاختلافات</h3>
+ <canvas id="map" width="600" height="340"></canvas>
+ <div class="note">الخريطة تعرض الاختلافات المغناطيسية المسجلة فقط، وليست صورة لما تحت الأرض.</div>
+</section>
+
+<section class="card">
+ <h3>التشخيص</h3>
+ <div id="diagnostic" class="note">ابدأ تشغيل المستشعر لإجراء الاختبار.</div>
+</section>
+
+<section class="card">
+ <div class="note">
+ تنبيه علمي: هذه الأداة لا تقيس مقاومة التربة ولا تنفذ رادار اختراق أرضي. لا تثبت وجود فراغ أو ذهب أو تحدد العمق. الاختلاف قد ينتج عن معادن قريبة أو مغناطيس أو حركة الهاتف أو مصادر كهربائية.
+ </div>
+</section>
+</main>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+let sensor=null, running=false, baseline=null;
+let current=null, history=[], records=[];
+
+function setStatus(message,on=false){
+ $('status').textContent=message;
+ $('dot').className='dot'+(on?' on':'');
+}
+function fmt(n){return Number.isFinite(n)?n.toFixed(2):'—'}
+function magnitude(x,y,z){return Math.sqrt(x*x+y*y+z*z)}
+
+function drawChart(){
+ const c=$('chart'),ctx=c.getContext('2d');
+ const w=c.width,h=c.height;
+ ctx.clearRect(0,0,w,h);
+ ctx.strokeStyle='#293c54';
+ for(let i=1;i<4;i++){
+  let yy=i*h/4;
+  ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke();
+ }
+ if(history.length<2)return;
+ let vals=history.slice(-100);
+ let min=Math.min(...vals),max=Math.max(...vals);
+ if(max-min<0.1){min-=1;max+=1}
+ ctx.strokeStyle='#e7bd63';ctx.lineWidth=3;ctx.beginPath();
+ vals.forEach((v,i)=>{
+  let px=i/(vals.length-1)*w;
+  let py=h-10-(v-min)/(max-min)*(h-20);
+  if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+ });
+ ctx.stroke();
+}
+
+function drawMap(){
+ const c=$('map'),ctx=c.getContext('2d');
+ const w=c.width,h=c.height;
+ ctx.clearRect(0,0,w,h);
+ ctx.fillStyle='#091522';ctx.fillRect(0,0,w,h);
+ if(!records.length){
+  ctx.fillStyle='#aebed2';ctx.textAlign='center';
+  ctx.fillText('سجّل نقاط المسح لعرض الخريطة',w/2,h/2);
+  return;
+ }
+ const maxRow=Math.max(...records.map(r=>r.row),1);
+ const maxCol=Math.max(...records.map(r=>r.col),1);
+ const values=records.map(r=>r.delta);
+ const maxAbs=Math.max(...values.map(Math.abs),0.1);
+ const cellW=Math.min(70,(w-50)/maxCol);
+ const cellH=Math.min(55,(h-40)/maxRow);
+ records.forEach(r=>{
+  const x=25+(r.col-1)*cellW;
+  const y=15+(r.row-1)*cellH;
+  const strength=Math.min(1,Math.abs(r.delta)/maxAbs);
+  if(r.delta>=0){
+   ctx.fillStyle=`rgba(255,105,80,${0.18+strength*.75})`;
+  }else{
+   ctx.fillStyle=`rgba(60,145,255,${0.18+strength*.75})`;
+  }
+  ctx.fillRect(x,y,cellW-3,cellH-3);
+  ctx.fillStyle='white';ctx.font='16px Arial';
+  ctx.textAlign='center';
+  ctx.fillText(fmt(r.delta),x+cellW/2,y+cellH/2+5);
+ });
+}
+
+function renderRecords(){
+ if(!records.length){
+  $('records').textContent='لا توجد قياسات مسجلة.';
+ }else{
+  $('records').innerHTML=records.map(r=>
+   `الصف ${r.row} | النقطة ${r.col} | المجال ${fmt(r.total)} µT | الفرق ${fmt(r.delta)} µT`
+  ).join('<br>');
+ }
+ drawMap();
+}
+
+function updateReading(x,y,z){
+ const total=magnitude(x,y,z);
+ current={x,y,z,total};
+ $('x').textContent=fmt(x);
+ $('y').textContent=fmt(y);
+ $('z').textContent=fmt(z);
+ $('total').textContent=fmt(total);
+ $('delta').textContent=baseline===null?'—':fmt(total-baseline);
+ history.push(total);
+ if(history.length>150)history.shift();
+ drawChart();
+}
+
+$('start').addEventListener('click',()=>{
+ if(!('Magnetometer' in window)){
+  setStatus('المتصفح لا يتيح قراءة Magnetometer');
+  $('diagnostic').textContent=
+  'واجهة Magnetometer غير متاحة في هذا المتصفح. جرّب Chrome على Android عبر HTTPS. إذا استمر عدم الدعم، نحتاج تطبيق Android أصليًا.';
+  return;
+ }
+ try{
+  sensor=new Magnetometer({frequency:10});
+  sensor.addEventListener('reading',()=>{
+   updateReading(sensor.x,sensor.y,sensor.z);
+   setStatus('المستشعر يعمل ويقرأ البيانات',true);
+   $('diagnostic').textContent='تصل قراءات حقيقية من المستشعر. ثبّت الهاتف عند المعايرة، وابتعد عن المعادن والمغناطيس.';
+  });
+  sensor.addEventListener('error',e=>{
+   setStatus('خطأ في المستشعر');
+   $('diagnostic').textContent=e.error?.message||'تعذر الوصول إلى المستشعر.';
+   stopSensor();
+  });
+  sensor.start();
+  running=true;
+  $('start').disabled=true;
+  $('stop').disabled=false;
+  $('calibrate').disabled=false;
+  $('save').disabled=false;
+  setStatus('جارٍ انتظار القراءة...');
+ }catch(e){
+  setStatus('تعذر تشغيل المستشعر');
+  $('diagnostic').textContent=e.message;
+ }
+});
+
+function stopSensor(){
+ if(sensor){try{sensor.stop()}catch(e){}sensor=null}
+ running=false;
+ $('start').disabled=false;
+ $('stop').disabled=true;
+}
+$('stop').addEventListener('click',()=>{
+ stopSensor();setStatus('تم إيقاف المستشعر');
+});
+$('calibrate').addEventListener('click',()=>{
+ if(!current)return;
+ baseline=current.total;
+ $('base').textContent=fmt(baseline);
+ $('delta').textContent='0.00';
+ $('diagnostic').textContent='تم تسجيل خط الأساس. لا تحرك الهاتف أثناء أخذ قراءة المعايرة.';
+});
+$('save').addEventListener('click',()=>{
+ if(!current||baseline===null){
+  $('diagnostic').textContent='شغّل المستشعر ثم نفّذ المعايرة أولًا.';
+  return;
+ }
+ const row=Math.max(1,Number($('row').value)||1);
+ const col=Math.max(1,Number($('col').value)||1);
+ records=records.filter(r=>!(r.row===row&&r.col===col));
+ records.push({
+  row,col,x:current.x,y:current.y,z:current.z,
+  total:current.total,delta:current.total-baseline,
+  time:new Date().toISOString()
+ });
+ renderRecords();
+ $('diagnostic').textContent=`تم حفظ الصف ${row} والنقطة ${col}.`;
+});
+$('next').addEventListener('click',()=>{
+ let c=Number($('col').value)||1;
+ $('col').value=c+1;
+});
+$('clear').addEventListener('click',()=>{
+ if(!confirm('هل تريد مسح جميع نقاط المسح؟'))return;
+ records=[];renderRecords();
+});
+$('export').addEventListener('click',()=>{
+ if(!records.length){alert('لا توجد بيانات للتصدير');return}
+ const header=['row','point','x_uT','y_uT','z_uT','total_uT','delta_uT','time'];
+ const rows=records.map(r=>[r.row,r.col,r.x,r.y,r.z,r.total,r.delta,r.time]);
+ const csv=[header,...rows].map(row=>row.join(',')).join('\n');
+ const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement('a');
+ a.href=url;a.download='DEEP1_measurements.csv';a.click();
+ URL.revokeObjectURL(url);
+});
+})();
+</script>
+</body>
+</html>
